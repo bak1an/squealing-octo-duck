@@ -3,6 +3,7 @@ module Main where
 import Text.ParserCombinators.Parsec hiding (spaces)
 import System.Environment
 import Control.Monad
+import Data.Complex
 import Numeric (readHex, readOct, readFloat, readDec)
 
 symbol :: Parser Char
@@ -22,11 +23,11 @@ escapedChars = do
 spaces :: Parser ()
 spaces = skipMany1 space
 
-
 data LispVal = Atom String
              | List [LispVal]
              | DottedList [LispVal] LispVal
              | Number Integer
+             | Complex (Complex Integer)
              | String String
              | Bool Bool
              | Character Char
@@ -41,13 +42,19 @@ parseBool = char '#' >> oneOf "tf" >>= \v -> return $ case v of
 parseChar :: Parser LispVal
 parseChar = do
         try $ string "#\\"
-        first <- anyChar
-        rest <- many $ noneOf " "
-        let res = if length rest == 0 then first
-                                      else case first:rest of
-                                               "space" -> ' '
-                                               "newline" -> '\n'
-        return $ Character res
+        val <- try (string "space" <|> string "newline") <|> count 1 anyChar
+        return $ Character $ case val of
+                     "space" -> ' '
+                     "newline" -> '\n'
+                     _ -> val !! 0
+
+parseComplex :: Parser LispVal
+parseComplex = do
+        real <- many digit
+        char '+'
+        imag <- many digit
+        char 'i'
+        return $ Complex (read real :+ read imag)
 
 parseString :: Parser LispVal
 parseString = do
@@ -89,12 +96,52 @@ parseNumberRad = do
 parseNumber = parseNumberDec <|> parseNumberRad
 
 parseExpr :: Parser LispVal
-parseExpr = parseAtom <|> parseChar <|> parseString <|> try parseFloat <|> try parseNumber <|> try parseBool
+parseExpr = parseAtom
+         <|> parseChar
+         <|> parseString
+         <|> try parseComplex
+         <|> try parseFloat
+         <|> try parseNumber
+         <|> try parseBool
+         <|> parseQuoted
+         <|> do char '('
+                x <- try parseList <|> parseDottedList
+                char ')'
+                return x
+
+parseList :: Parser LispVal
+parseList = liftM List $ sepBy parseExpr spaces
+
+parseDottedList :: Parser LispVal
+parseDottedList = do
+        head <- endBy parseExpr spaces
+        tail <- char '.' >> spaces >> parseExpr
+        return $ DottedList head tail
+
+parseQuoted :: Parser LispVal
+parseQuoted = do
+        x <- char '\'' >> parseExpr
+        return $ List [Atom "quote", x]
+
+showVal :: LispVal -> String
+showVal (String s) = "\"" ++ s ++ "\""
+showVal (Complex v) = "Complex(" ++ show v ++ ")"
+showVal (Number n) = show n
+showVal (Bool True) = "#t"
+showVal (Bool False) = "#f"
+showVal (Float f) = show f
+showVal (Character c) = "'" ++ [c] ++ "'"
+showVal (Atom a) = "Atom(" ++ a ++ ")"
+showVal (List l) = "(" ++ (unwords . map showVal $ l) ++ ")"
+showVal (DottedList h t) = "(" ++ (unwords . map showVal $ h) ++ " . " ++ (showVal t) ++ ")"
+
+instance Show LispVal where
+        show = showVal
 
 readExpr :: String -> String
 readExpr input = case parse parseExpr "lisp" input of
     Left err -> "No match: " ++ show err
-    Right val -> "Found value"
+    Right val -> "Found: " ++ show val
 
 main :: IO ()
 main = do
